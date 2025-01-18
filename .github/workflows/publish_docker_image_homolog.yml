@@ -20,8 +20,8 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: atendai/evolution-api
-          tags: homolog
+          images: mbppereira/evolution-api
+          tags: develop
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3

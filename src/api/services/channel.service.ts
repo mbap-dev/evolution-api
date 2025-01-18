@@ -151,6 +151,7 @@ export class ChannelStartupService {
     this.localSettings.readMessages = data?.readMessages;
     this.localSettings.readStatus = data?.readStatus;
     this.localSettings.syncFullHistory = data?.syncFullHistory;
+    this.localSettings.wavoipToken = data?.wavoipToken;
   }
 
   public async setSettings(data: SettingsDto) {
@@ -166,6 +167,7 @@ export class ChannelStartupService {
         readMessages: data.readMessages,
         readStatus: data.readStatus,
         syncFullHistory: data.syncFullHistory,
+        wavoipToken: data.wavoipToken,
       },
       create: {
         rejectCall: data.rejectCall,
@@ -175,6 +177,7 @@ export class ChannelStartupService {
         readMessages: data.readMessages,
         readStatus: data.readStatus,
         syncFullHistory: data.syncFullHistory,
+        wavoipToken: data.wavoipToken,
         instanceId: this.instanceId,
       },
     });
@@ -186,6 +189,12 @@ export class ChannelStartupService {
     this.localSettings.readMessages = data?.readMessages;
     this.localSettings.readStatus = data?.readStatus;
     this.localSettings.syncFullHistory = data?.syncFullHistory;
+    this.localSettings.wavoipToken = data?.wavoipToken;
+
+    if (this.localSettings.wavoipToken && this.localSettings.wavoipToken.length > 0) {
+      this.client.ws.close();
+      this.client.ws.connect();
+    }
   }
 
   public async findSettings() {
@@ -207,6 +216,7 @@ export class ChannelStartupService {
       readMessages: data.readMessages,
       readStatus: data.readStatus,
       syncFullHistory: data.syncFullHistory,
+      wavoipToken: data.wavoipToken,
     };
   }
 
@@ -419,7 +429,7 @@ export class ChannelStartupService {
     return data;
   }
 
-  public async sendDataWebhook<T = any>(event: Events, data: T, local = true) {
+  public async sendDataWebhook<T = any>(event: Events, data: T, local = true, integration?: string[]) {
     const serverUrl = this.configService.get<HttpServer>('SERVER').URL;
     const tzoffset = new Date().getTimezoneOffset() * 60000; //offset in milliseconds
     const localISOTime = new Date(Date.now() - tzoffset).toISOString();
@@ -439,6 +449,7 @@ export class ChannelStartupService {
       sender: this.wuid,
       apiKey: expose && instanceApikey ? instanceApikey : null,
       local,
+      integration,
     });
   }
 
@@ -540,12 +551,23 @@ export class ChannelStartupService {
       participants?: string;
     };
 
+    const timestampFilter = {};
+    if (query?.where?.messageTimestamp) {
+      if (query.where.messageTimestamp['gte'] && query.where.messageTimestamp['lte']) {
+        timestampFilter['messageTimestamp'] = {
+          gte: Math.floor(new Date(query.where.messageTimestamp['gte']).getTime() / 1000),
+          lte: Math.floor(new Date(query.where.messageTimestamp['lte']).getTime() / 1000),
+        };
+      }
+    }
+
     const count = await this.prismaRepository.message.count({
       where: {
         instanceId: this.instanceId,
         id: query?.where?.id,
         source: query?.where?.source,
         messageType: query?.where?.messageType,
+        ...timestampFilter,
         AND: [
           keyFilters?.id ? { key: { path: ['id'], equals: keyFilters?.id } } : {},
           keyFilters?.fromMe ? { key: { path: ['fromMe'], equals: keyFilters?.fromMe } } : {},
@@ -569,6 +591,7 @@ export class ChannelStartupService {
         id: query?.where?.id,
         source: query?.where?.source,
         messageType: query?.where?.messageType,
+        ...timestampFilter,
         AND: [
           keyFilters?.id ? { key: { path: ['id'], equals: keyFilters?.id } } : {},
           keyFilters?.fromMe ? { key: { path: ['fromMe'], equals: keyFilters?.fromMe } } : {},
@@ -655,8 +678,8 @@ export class ChannelStartupService {
             (ARRAY_AGG("Message"."sessionId" ORDER BY "Message"."messageTimestamp" DESC))[1] AS last_message_session_id,
             (ARRAY_AGG("Message"."status" ORDER BY "Message"."messageTimestamp" DESC))[1] AS last_message_status
           FROM "Chat"
-          LEFT JOIN "Message" ON "Message"."messageType" != 'reactionMessage' and "Message"."key"->>'remoteJid' = "Chat"."remoteJid"
-          LEFT JOIN "Contact" ON "Chat"."remoteJid" = "Contact"."remoteJid"
+          LEFT JOIN "Message" ON "Message"."messageType" != 'reactionMessage' and "Message"."key"->>'remoteJid' = "Chat"."remoteJid"  AND "Chat"."instanceId" = "Message"."instanceId"
+          LEFT JOIN "Contact" ON "Chat"."remoteJid" = "Contact"."remoteJid" AND "Chat"."instanceId" = "Contact"."instanceId"
           WHERE 
             "Chat"."instanceId" = ${this.instanceId}
           GROUP BY
@@ -690,8 +713,8 @@ export class ChannelStartupService {
             (ARRAY_AGG("Message"."sessionId" ORDER BY "Message"."messageTimestamp" DESC))[1] AS last_message_session_id,
             (ARRAY_AGG("Message"."status" ORDER BY "Message"."messageTimestamp" DESC))[1] AS last_message_status
           FROM "Chat"
-          LEFT JOIN "Message" ON "Message"."messageType" != 'reactionMessage' and "Message"."key"->>'remoteJid' = "Chat"."remoteJid"
-          LEFT JOIN "Contact" ON "Chat"."remoteJid" = "Contact"."remoteJid"
+          LEFT JOIN "Message" ON "Message"."messageType" != 'reactionMessage' and "Message"."key"->>'remoteJid' = "Chat"."remoteJid" AND "Chat"."instanceId" = "Message"."instanceId"
+          LEFT JOIN "Contact" ON "Chat"."remoteJid" = "Contact"."remoteJid" AND "Chat"."instanceId" = "Contact"."instanceId"
           WHERE 
             "Chat"."instanceId" = ${this.instanceId} AND "Chat"."remoteJid" = ${remoteJid} and "Message"."messageType" != 'reactionMessage'
           GROUP BY

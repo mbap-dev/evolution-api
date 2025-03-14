@@ -1,6 +1,6 @@
 {
   "name": "evolution-api",
-  "version": "2.2.2",
+  "version": "2.2.3",
   "description": "Rest api for communication with WhatsApp",
   "main": "./dist/main.js",
   "type": "commonjs",
@@ -41,7 +41,7 @@
   ],
   "author": {
     "name": "Davidson Gomes",
-    "email": "contato@atendai.com"
+    "email": "contato@evolution-api.com"
   },
   "license": "Apache-2.0",
   "bugs": {
@@ -59,7 +59,7 @@
     "@sentry/node": "^8.47.0",
     "amqplib": "^0.10.5",
     "axios": "^1.7.9",
-    "baileys": "github:EvolutionAPI/Baileys",
+    "baileys": "github:mbap-dev/Baileys#v6.7.16",
     "class-validator": "^0.14.1",
     "compression": "^1.7.5",
     "cors": "^2.8.5",

@@ -1,3 +1,4 @@
+import { getCollectionsDto } from '@api/dto/business.dto';
 import { OfferCallDto } from '@api/dto/call.dto';
 import {
   ArchiveChatDto,
@@ -91,6 +92,7 @@ import makeWASocket, {
   BufferedEventData,
   BufferJSON,
   CacheStore,
+  CatalogCollection,
   Chat,
   ConnectionState,
   Contact,
@@ -100,6 +102,7 @@ import makeWASocket, {
   fetchLatestBaileysVersion,
   generateWAMessageFromContent,
   getAggregateVotesInPollMessage,
+  GetCatalogOptions,
   getContentType,
   getDevice,
   GroupMetadata,
@@ -113,6 +116,7 @@ import makeWASocket, {
   MiscMessageGenerationOptions,
   ParticipantAction,
   prepareWAMessageMedia,
+  Product,
   proto,
   UserFacingSocketConfig,
   WABrowserDescription,
@@ -1128,9 +1132,10 @@ export class BaileysStartupService extends ChannelStartupService {
             }
           }
 
+          const editedMessage =
+            received?.message?.protocolMessage || received?.message?.editedMessage?.message?.protocolMessage;
+
           if (received.message?.protocolMessage?.editedMessage || received.message?.editedMessage?.message) {
-            const editedMessage =
-              received.message?.protocolMessage || received.message?.editedMessage?.message?.protocolMessage;
             if (editedMessage) {
               if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled)
                 this.chatwootService.eventWhatsapp(
@@ -1160,6 +1165,17 @@ export class BaileysStartupService extends ChannelStartupService {
             this.logger.info('Recovered message lost');
             await this.baileysCache.delete(received.key.id);
           }
+
+          // Cache to avoid duplicate messages
+          const messageKey = `${this.instance.id}_${received.key.id}`;
+          const cached = await this.baileysCache.get(messageKey);
+
+          if (cached && !editedMessage) {
+            this.logger.info(`Message duplicated ignored: ${received.key.id}`);
+            continue;
+          }
+
+          await this.baileysCache.set(messageKey, true, 30 * 60);
 
           if (
             (type !== 'notify' && type !== 'append') ||
@@ -1421,6 +1437,17 @@ export class BaileysStartupService extends ChannelStartupService {
         if (settings?.groupsIgnore && key.remoteJid?.includes('@g.us')) {
           continue;
         }
+
+        const updateKey = `${this.instance.id}_${key.id}_${update.status}`;
+
+        const cached = await this.baileysCache.get(updateKey);
+
+        if (cached) {
+          this.logger.info(`Message duplicated ignored: ${key.id}`);
+          continue;
+        }
+
+        await this.baileysCache.set(updateKey, true, 30 * 60);
 
         if (status[update.status] === 'READ' && key.fromMe) {
           if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled) {
@@ -2163,6 +2190,7 @@ export class BaileysStartupService extends ChannelStartupService {
           const cache = this.configService.get<CacheConf>('CACHE');
           if (!cache.REDIS.ENABLED && !cache.LOCAL.ENABLED) group = await this.findGroup({ groupJid: sender }, 'inner');
           else group = await this.getGroupMetadataCache(sender);
+          // group = await this.findGroup({ groupJid: sender }, 'inner');
         } catch (error) {
           throw new NotFoundException('Group not found');
         }
@@ -2716,7 +2744,9 @@ export class BaileysStartupService extends ChannelStartupService {
 
     if (file) mediaData.sticker = file.buffer.toString('base64');
 
-    const convert = await this.convertToWebP(data.sticker);
+    const convert = data?.notConvertSticker
+      ? Buffer.from(data.sticker, 'base64')
+      : await this.convertToWebP(data.sticker);
     const gifPlayback = data.sticker.includes('.gif');
     const result = await this.sendMessageWithTyping(
       data.number,
@@ -3551,25 +3581,43 @@ export class BaileysStartupService extends ChannelStartupService {
         const messageId = response.message?.protocolMessage?.key?.id;
         if (messageId) {
           const isLogicalDeleted = configService.get<Database>('DATABASE').DELETE_DATA.LOGICAL_MESSAGE_DELETE;
-          let message = await this.prismaRepository.message.findUnique({
-            where: { id: messageId },
+          let message = await this.prismaRepository.message.findFirst({
+            where: {
+              key: {
+                path: ['id'],
+                equals: messageId,
+              },
+            },
           });
           if (isLogicalDeleted) {
             if (!message) return response;
             const existingKey = typeof message?.key === 'object' && message.key !== null ? message.key : {};
             message = await this.prismaRepository.message.update({
-              where: { id: messageId },
+              where: { id: message.id },
               data: {
                 key: {
                   ...existingKey,
                   deleted: true,
                 },
+                status: 'DELETED',
               },
+            });
+            const messageUpdate: any = {
+              messageId: message.id,
+              keyId: messageId,
+              remoteJid: response.key.remoteJid,
+              fromMe: response.key.fromMe,
+              participant: response.key?.remoteJid,
+              status: 'DELETED',
+              instanceId: this.instanceId,
+            };
+            await this.prismaRepository.messageUpdate.create({
+              data: messageUpdate,
             });
           } else {
             await this.prismaRepository.message.deleteMany({
               where: {
-                id: messageId,
+                id: message.id,
               },
             });
           }
@@ -3578,7 +3626,7 @@ export class BaileysStartupService extends ChannelStartupService {
             instanceId: message.instanceId,
             key: message.key,
             messageType: message.messageType,
-            status: message.status,
+            status: 'DELETED',
             source: message.source,
             messageTimestamp: message.messageTimestamp,
             pushName: message.pushName,
@@ -3892,13 +3940,72 @@ export class BaileysStartupService extends ChannelStartupService {
     }
 
     try {
-      return await this.client.sendMessage(jid, {
+      const response = await this.client.sendMessage(jid, {
         ...(options as any),
         edit: data.key,
       });
+      if (response) {
+        const messageId = response.message?.protocolMessage?.key?.id;
+        if (messageId) {
+          let message = await this.prismaRepository.message.findFirst({
+            where: {
+              key: {
+                path: ['id'],
+                equals: messageId,
+              },
+            },
+          });
+          if (!message) throw new NotFoundException('Message not found');
+
+          if (!(message.key.valueOf() as any).fromMe) {
+            new BadRequestException('You cannot edit others messages');
+          }
+          if ((message.key.valueOf() as any)?.deleted) {
+            new BadRequestException('You cannot edit deleted messages');
+          }
+
+          const updateMessage = this.prepareMessage({ ...response });
+          message = await this.prismaRepository.message.update({
+            where: { id: message.id },
+            data: {
+              message: {
+                ...updateMessage?.message?.[updateMessage.messageType]?.editedMessage,
+              },
+              status: 'EDITED',
+            },
+          });
+          const messageUpdate: any = {
+            messageId: message.id,
+            keyId: messageId,
+            remoteJid: response.key.remoteJid,
+            fromMe: response.key.fromMe,
+            participant: response.key?.remoteJid,
+            status: 'EDITED',
+            instanceId: this.instanceId,
+          };
+          await this.prismaRepository.messageUpdate.create({
+            data: messageUpdate,
+          });
+
+          this.sendDataWebhook(Events.MESSAGES_EDITED, {
+            id: message.id,
+            instanceId: message.instanceId,
+            key: message.key,
+            messageType: message.messageType,
+            status: 'EDITED',
+            source: message.source,
+            messageTimestamp: message.messageTimestamp,
+            pushName: message.pushName,
+            participant: message.participant,
+            message: message.message,
+          });
+        }
+      }
+
+      return response;
     } catch (error) {
       this.logger.error(error);
-      throw new BadRequestException(error.toString());
+      throw error;
     }
   }
 
@@ -4526,5 +4633,138 @@ export class BaileysStartupService extends ChannelStartupService {
     };
 
     return response;
+  }
+
+  //Business Controller
+  public async fetchCatalog(instanceName: string, data: getCollectionsDto) {
+    const jid = data.number ? createJid(data.number) : this.client?.user?.id;
+    const limit = data.limit || 10;
+    const cursor = null;
+
+    const onWhatsapp = (await this.whatsappNumber({ numbers: [jid] }))?.shift();
+
+    if (!onWhatsapp.exists) {
+      throw new BadRequestException(onWhatsapp);
+    }
+
+    try {
+      const info = (await this.whatsappNumber({ numbers: [jid] }))?.shift();
+      const business = await this.fetchBusinessProfile(info?.jid);
+
+      let catalog = await this.getCatalog({ jid: info?.jid, limit, cursor });
+      let nextPageCursor = catalog.nextPageCursor;
+      let nextPageCursorJson = nextPageCursor ? JSON.parse(atob(nextPageCursor)) : null;
+      let pagination = nextPageCursorJson?.pagination_cursor
+        ? JSON.parse(atob(nextPageCursorJson.pagination_cursor))
+        : null;
+      let fetcherHasMore = pagination?.fetcher_has_more === true ? true : false;
+
+      let productsCatalog = catalog.products || [];
+      let countLoops = 0;
+      while (fetcherHasMore && countLoops < 4) {
+        catalog = await this.getCatalog({ jid: info?.jid, limit, cursor: nextPageCursor });
+        nextPageCursor = catalog.nextPageCursor;
+        nextPageCursorJson = nextPageCursor ? JSON.parse(atob(nextPageCursor)) : null;
+        pagination = nextPageCursorJson?.pagination_cursor
+          ? JSON.parse(atob(nextPageCursorJson.pagination_cursor))
+          : null;
+        fetcherHasMore = pagination?.fetcher_has_more === true ? true : false;
+        productsCatalog = [...productsCatalog, ...catalog.products];
+        countLoops++;
+      }
+
+      return {
+        wuid: info?.jid || jid,
+        numberExists: info?.exists,
+        isBusiness: business.isBusiness,
+        catalogLength: productsCatalog.length,
+        catalog: productsCatalog,
+      };
+    } catch (error) {
+      console.log(error);
+      return {
+        wuid: jid,
+        name: null,
+        isBusiness: false,
+      };
+    }
+  }
+
+  public async getCatalog({
+    jid,
+    limit,
+    cursor,
+  }: GetCatalogOptions): Promise<{ products: Product[]; nextPageCursor: string | undefined }> {
+    try {
+      jid = jid ? createJid(jid) : this.instance.wuid;
+
+      const catalog = await this.client.getCatalog({ jid, limit: limit, cursor: cursor });
+
+      if (!catalog) {
+        return {
+          products: undefined,
+          nextPageCursor: undefined,
+        };
+      }
+
+      return catalog;
+    } catch (error) {
+      throw new InternalServerErrorException('Error getCatalog', error.toString());
+    }
+  }
+
+  public async fetchCollections(instanceName: string, data: getCollectionsDto) {
+    const jid = data.number ? createJid(data.number) : this.client?.user?.id;
+    const limit = data.limit <= 20 ? data.limit : 20; //(tem esse limite, não sei porque)
+
+    const onWhatsapp = (await this.whatsappNumber({ numbers: [jid] }))?.shift();
+
+    if (!onWhatsapp.exists) {
+      throw new BadRequestException(onWhatsapp);
+    }
+
+    try {
+      const info = (await this.whatsappNumber({ numbers: [jid] }))?.shift();
+      const business = await this.fetchBusinessProfile(info?.jid);
+      const collections = await this.getCollections(info?.jid, limit);
+
+      return {
+        wuid: info?.jid || jid,
+        name: info?.name,
+        numberExists: info?.exists,
+        isBusiness: business.isBusiness,
+        collectionsLength: collections?.length,
+        collections: collections,
+      };
+    } catch (error) {
+      return {
+        wuid: jid,
+        name: null,
+        isBusiness: false,
+      };
+    }
+  }
+
+  public async getCollections(jid?: string | undefined, limit?: number): Promise<CatalogCollection[]> {
+    try {
+      jid = jid ? createJid(jid) : this.instance.wuid;
+
+      const result = await this.client.getCollections(jid, limit);
+
+      if (!result) {
+        return [
+          {
+            id: undefined,
+            name: undefined,
+            products: [],
+            status: undefined,
+          },
+        ];
+      }
+
+      return result.collections;
+    } catch (error) {
+      throw new InternalServerErrorException('Error getCatalog', error.toString());
+    }
   }
 }

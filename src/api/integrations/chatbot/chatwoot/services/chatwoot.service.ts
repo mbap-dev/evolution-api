@@ -701,19 +701,31 @@ export class ChatwootService {
       if (contactConversations.payload.length) {
         let conversation: any;
         if (this.provider.reopenConversation) {
-          conversation = contactConversations.payload.find((conversation) => conversation.inbox_id == filterInbox.id);
+          const inboxConversations = contactConversations.payload.filter(
+            (conversation) => conversation.inbox_id == filterInbox.id,
+          );
+          const hasActiveConversation = inboxConversations.some(
+            (conversation) => conversation.status === 'open' || conversation.status === 'pending',
+          );
+
+          if (hasActiveConversation) {
+            conversation = inboxConversations.find(
+              (conversation) => conversation.status === 'open' || conversation.status === 'pending',
+            );
+          } else {
+            conversation = inboxConversations.find((conversation) => conversation.inbox_id == filterInbox.id);
+          }
+
           this.logger.verbose(`Found conversation in reopenConversation mode: ${JSON.stringify(conversation)}`);
 
-          if (this.provider.conversationPending && conversation.status !== 'open') {
-            if (conversation) {
-              await client.conversations.toggleStatus({
-                accountId: this.provider.accountId,
-                conversationId: conversation.id,
-                data: {
-                  status: 'pending',
-                },
-              });
-            }
+          if (this.provider.conversationPending && conversation && conversation.status !== 'open') {
+            await client.conversations.toggleStatus({
+              accountId: this.provider.accountId,
+              conversationId: conversation.id,
+              data: {
+                status: 'pending',
+              },
+            });
           }
         } else {
           conversation = contactConversations.payload.find(

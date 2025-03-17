@@ -572,6 +572,11 @@ export class ChatwootService {
           this.logger.error(`Error getting conversation: ${error}`);
           conversationExists = false;
         }
+        if (conversationExists && conversationExists.status === 'resolved') {
+          this.logger.verbose('Conversation was resolved, re-calling createConversation');
+          this.cache.delete(cacheKey);
+          return await this.createConversation(instance, body);
+        }
         if (!conversationExists) {
           this.logger.verbose('Conversation does not exist, re-calling createConversation');
           this.cache.delete(cacheKey);

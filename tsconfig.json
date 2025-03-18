@@ -5,6 +5,7 @@
     "declaration": true,
     "target": "es2020",
     "module": "CommonJS",
+    "moduleResolution": "NodeNext",
     "rootDir": "./",
     "resolveJsonModule": true,
     "removeComments": true,

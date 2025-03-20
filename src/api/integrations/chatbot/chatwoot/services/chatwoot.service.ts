@@ -1092,6 +1092,8 @@ export class ChatwootService {
 
         const response = await axios.get(media, {
           responseType: 'arraybuffer',
+          timeout: 120000,
+          maxContentLength: 50 * 1024 * 1024,
         });
         mimeType = response.headers['content-type'];
       }

@@ -572,11 +572,6 @@ export class ChatwootService {
           this.logger.error(`Error getting conversation: ${error}`);
           conversationExists = false;
         }
-        if (conversationExists && conversationExists.status === 'resolved') {
-          this.logger.verbose('Conversation was resolved, re-calling createConversation');
-          this.cache.delete(cacheKey);
-          return await this.createConversation(instance, body);
-        }
         if (!conversationExists) {
           this.logger.verbose('Conversation does not exist, re-calling createConversation');
           this.cache.delete(cacheKey);
@@ -703,46 +698,33 @@ export class ChatwootService {
         return null;
       }
 
-      if (contactConversations.payload.length) {
-        let conversation: any;
+      let inboxConversation = contactConversations.payload.find(
+        (conversation) => conversation.inbox_id == filterInbox.id,
+      );
+      if (inboxConversation) {
         if (this.provider.reopenConversation) {
-          const inboxConversations = contactConversations.payload.filter(
-            (conversation) => conversation.inbox_id == filterInbox.id,
-          );
-          const hasActiveConversation = inboxConversations.some(
-            (conversation) => conversation.status === 'open' || conversation.status === 'pending',
-          );
+          this.logger.verbose(`Found conversation in reopenConversation mode: ${JSON.stringify(inboxConversation)}`);
 
-          if (hasActiveConversation) {
-            conversation = inboxConversations.find(
-              (conversation) => conversation.status === 'open' || conversation.status === 'pending',
-            );
-          } else {
-            conversation = inboxConversations.find((conversation) => conversation.inbox_id == filterInbox.id);
-          }
-
-          this.logger.verbose(`Found conversation in reopenConversation mode: ${JSON.stringify(conversation)}`);
-
-          if (this.provider.conversationPending && conversation && conversation.status !== 'open') {
+          if (this.provider.conversationPending && inboxConversation.status !== 'open') {
             await client.conversations.toggleStatus({
               accountId: this.provider.accountId,
-              conversationId: conversation.id,
+              conversationId: inboxConversation.id,
               data: {
                 status: 'pending',
               },
             });
           }
         } else {
-          conversation = contactConversations.payload.find(
+          inboxConversation = contactConversations.payload.find(
             (conversation) => conversation.status !== 'resolved' && conversation.inbox_id == filterInbox.id,
           );
-          this.logger.verbose(`Found conversation: ${JSON.stringify(conversation)}`);
+          this.logger.verbose(`Found conversation: ${JSON.stringify(inboxConversation)}`);
         }
 
-        if (conversation) {
-          this.logger.verbose(`Returning existing conversation ID: ${conversation.id}`);
-          this.cache.set(cacheKey, conversation.id);
-          return conversation.id;
+        if (inboxConversation) {
+          this.logger.verbose(`Returning existing conversation ID: ${inboxConversation.id}`);
+          this.cache.set(cacheKey, inboxConversation.id);
+          return inboxConversation.id;
         }
       }
 
@@ -1092,8 +1074,6 @@ export class ChatwootService {
 
         const response = await axios.get(media, {
           responseType: 'arraybuffer',
-          timeout: 120000,
-          maxContentLength: 50 * 1024 * 1024,
         });
         mimeType = response.headers['content-type'];
       }
@@ -1672,7 +1652,7 @@ export class ChatwootService {
       stickerMessage: undefined,
       documentMessage: msg.documentMessage?.caption,
       documentWithCaptionMessage: msg.documentWithCaptionMessage?.message?.documentMessage?.caption,
-      audioMessage: msg.audioMessage?.caption,
+      audioMessage: msg.audioMessage ? (msg.audioMessage.caption ?? '') : undefined,
       contactMessage: msg.contactMessage?.vcard,
       contactsArrayMessage: msg.contactsArrayMessage,
       locationMessage: msg.locationMessage,

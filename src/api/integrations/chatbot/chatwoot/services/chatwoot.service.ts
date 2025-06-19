@@ -2142,7 +2142,6 @@ export class ChatwootService {
             instance,
             body,
             'WAID:' + body.key.id,
-            null,
             retryCount,
           );
 

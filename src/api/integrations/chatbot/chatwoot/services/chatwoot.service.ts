@@ -949,7 +949,7 @@ export class ChatwootService {
     return message;
   }
 
-  public async sendData(
+  private async sendData(
     conversationId: number,
     fileStream: Readable,
     fileName: string,
@@ -959,17 +959,16 @@ export class ChatwootService {
     messageBody?: any,
     sourceId?: string,
     quotedMsg?: MessageModel,
-    retryCount = 0,
-    maxRetries = 1,
   ) {
     if (sourceId && this.isImportHistoryAvailable()) {
       const messageAlreadySaved = await chatwootImport.getExistingSourceIds([sourceId], conversationId);
-      if (messageAlreadySaved && messageAlreadySaved.size > 0) {
-        this.logger.warn('Message already saved on chatwoot');
-        return null;
+      if (messageAlreadySaved) {
+        if (messageAlreadySaved.size > 0) {
+          this.logger.warn('Message already saved on chatwoot');
+          return null;
+        }
       }
     }
-
     const data = new FormData();
 
     if (content) {
@@ -977,15 +976,19 @@ export class ChatwootService {
     }
 
     data.append('message_type', messageType);
+
     data.append('attachments[]', fileStream, { filename: fileName });
 
     const sourceReplyId = quotedMsg?.chatwootMessageId || null;
 
     if (messageBody && instance) {
       const replyToIds = await this.getReplyToIds(messageBody, instance);
+
       if (replyToIds.in_reply_to || replyToIds.in_reply_to_external_id) {
-        const contentAttributes = JSON.stringify({ ...replyToIds });
-        data.append('content_attributes', contentAttributes);
+        const content = JSON.stringify({
+          ...replyToIds,
+        });
+        data.append('content_attributes', content);
       }
     }
 
@@ -1010,25 +1013,10 @@ export class ChatwootService {
 
     try {
       const { data } = await axios.request(config);
+
       return data;
     } catch (error) {
-      if (
-        error.response &&
-        error.response.status === 404 &&
-        error.response.data.error === 'Resource could not be found' &&
-        retryCount < maxRetries
-      ) {
-        const remoteJid = messageBody.key.remoteJid;
-        const cacheKey = `${instance.instanceName}:createConversation-${remoteJid}`;
-        this.logger.verbose(`Conversation not found. Deleting cache key: ${cacheKey}`);
-        await this.cache.delete(cacheKey);
-
-        this.logger.verbose(`Retrying eventWhatsapp for ${remoteJid}, attempt ${retryCount + 1} of ${maxRetries}`);
-        return await this.eventWhatsapp('messages.upsert', instance, messageBody, retryCount + 1);
-      } else {
-        this.logger.error(`Failed to send message: ${error}`);
-        return null;
-      }
+      this.logger.error(error);
     }
   }
 
@@ -1876,7 +1864,7 @@ export class ChatwootService {
     return messageContent;
   }
 
-  public async eventWhatsapp(event: string, instance: InstanceDto, body: any, retryCount: number = 0) {
+  public async eventWhatsapp(event: string, instance: InstanceDto, body: any) {
     try {
       const waInstance = this.waMonitor.waInstances[instance.instanceName];
 
@@ -2042,7 +2030,6 @@ export class ChatwootService {
               body,
               'WAID:' + body.key.id,
               quotedMsg,
-              retryCount,
             );
 
             if (!send) {
@@ -2062,7 +2049,6 @@ export class ChatwootService {
               body,
               'WAID:' + body.key.id,
               quotedMsg,
-              retryCount,
             );
 
             if (!send) {
@@ -2142,7 +2128,6 @@ export class ChatwootService {
             instance,
             body,
             'WAID:' + body.key.id,
-            retryCount,
           );
 
           if (!send) {

@@ -1290,11 +1290,15 @@ export class ChatwootService {
       if (
         this.provider.reopenConversation === false &&
         body.event === 'conversation_status_changed' &&
-        body.status === 'resolved' &&
-        body.meta?.sender?.identifier
+        body.status === 'resolved'
       ) {
-        const keyToDelete = `${instance.instanceName}:createConversation-${body.meta.sender.identifier}`;
-        this.cache.delete(keyToDelete);
+        if (body.meta?.sender?.identifier) {
+          const keyToDelete = `${instance.instanceName}:createConversation-${body.meta.sender.identifier}`;
+          this.cache.delete(keyToDelete);
+        } else {
+          const waInstance = this.waMonitor.waInstances[instance.instanceName];
+          waInstance.clearCacheChatwoot();
+        }
       }
 
       if (

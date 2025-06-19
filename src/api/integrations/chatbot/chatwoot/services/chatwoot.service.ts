@@ -1017,6 +1017,77 @@ export class ChatwootService {
       return data;
     } catch (error) {
       this.logger.error(error);
+      throw error;
+    }
+  }
+
+  /**
+   * Envia mídia para o Chatwoot.  Tenta uma vez; se receber 404,
+   * remove a chave de cache, cria uma nova conversa e tenta de novo.
+   */
+  private async sendDataWithRetry(
+    conversationId: number,
+    fileStream: Readable,
+    fileName: string,
+    messageType: 'incoming' | 'outgoing' | undefined,
+    content?: string,
+    instance?: InstanceDto,
+    messageBody?: any,
+    sourceId?: string,
+    quotedMsg?: MessageModel,
+    maxRetries = 1,
+  ) {
+    try {
+      const conversationId = await this.createConversation(instance, messageBody);
+      if (!conversationId) return null;
+
+      return await this.sendData(
+        conversationId,
+        fileStream,
+        fileName,
+        messageType,
+        content,
+        instance,
+        messageBody,
+        sourceId,
+        quotedMsg,
+      );
+    } catch (err: any) {
+      if (
+        err?.response?.status === 404 &&
+        err?.response?.data?.error === 'Resource could not be found' &&
+        maxRetries > 0
+      ) {
+        const isLid = messageBody.key.remoteJid.includes('@lid') && messageBody.key.senderPn;
+        const remoteJid = isLid ? messageBody.key.senderPn : messageBody.key.remoteJid;
+        const cacheKey = `${instance.instanceName}:createConversation-${remoteJid}`;
+
+        this.logger.warn(`Conversation não existe mais. Limpando "${cacheKey}" e tentando novamente…`);
+        await this.cache.delete(cacheKey);
+
+        try {
+          const newConversationId = await this.createConversation(instance, messageBody);
+          if (!newConversationId) return null;
+
+          return await this.sendData(
+            newConversationId,
+            fileStream,
+            fileName,
+            messageType,
+            content,
+            instance,
+            messageBody,
+            sourceId,
+            quotedMsg,
+          );
+        } catch (e) {
+          this.logger.error(`Retry falhou: ${e}`);
+          return null;
+        }
+      }
+
+      this.logger.error(`Failed to send message: ${err}`);
+      return null;
     }
   }
 
@@ -2020,7 +2091,7 @@ export class ChatwootService {
               content = `${bodyMessage}`;
             }
 
-            const send = await this.sendData(
+            const send = await this.sendDataWithRetry(
               getConversation,
               fileStream,
               nameFile,
@@ -2039,7 +2110,7 @@ export class ChatwootService {
 
             return send;
           } else {
-            const send = await this.sendData(
+            const send = await this.sendDataWithRetry(
               getConversation,
               fileStream,
               nameFile,
@@ -2119,7 +2190,7 @@ export class ChatwootService {
           const title = truncStr(adsMessage.title, 40);
           const description = truncStr(adsMessage?.body, 75);
 
-          const send = await this.sendData(
+          const send = await this.sendDataWithRetry(
             getConversation,
             fileStream,
             nameFile,

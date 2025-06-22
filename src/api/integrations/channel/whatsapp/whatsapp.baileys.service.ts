@@ -2022,7 +2022,7 @@ export class BaileysStartupService extends ChannelStartupService {
         }
       }
 
-      const linkPreview = options?.linkPreview != false ? undefined : false;
+      const linkPreview = false;
 
       let quoted: WAMessage;
 
@@ -2283,7 +2283,7 @@ export class BaileysStartupService extends ChannelStartupService {
         delay: data?.delay,
         presence: 'composing',
         quoted: data?.quoted,
-        linkPreview: data?.linkPreview,
+        linkPreview: false,
         mentionsEveryOne: data?.mentionsEveryOne,
         mentioned: data?.mentioned,
       },
@@ -2299,7 +2299,7 @@ export class BaileysStartupService extends ChannelStartupService {
         delay: data?.delay,
         presence: 'composing',
         quoted: data?.quoted,
-        linkPreview: data?.linkPreview,
+        linkPreview: false,
         mentionsEveryOne: data?.mentionsEveryOne,
         mentioned: data?.mentioned,
       },

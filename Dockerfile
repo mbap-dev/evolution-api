@@ -13,7 +13,7 @@ COPY ./package*.json ./
 COPY ./tsconfig.json ./
 COPY ./tsup.config.ts ./
 
-RUN npm ci --silent --unsafe-perm
+RUN npm ci --force
 
 COPY ./src ./src
 COPY ./public ./public
